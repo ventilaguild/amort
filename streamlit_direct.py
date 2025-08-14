@@ -1,0 +1,95 @@
+import streamlit as st
+import tempfile, os, shutil, uuid, sys, subprocess
+from datetime import datetime
+from werkzeug.utils import secure_filename  # pip install werkzeug
+
+st.set_page_config(page_title="Amort uploader (subprocess)", layout="wide")
+st.title("Amort uploader — runs existing amort.py (subprocess)")
+
+AMORT_SOURCE = "amort.py"   # path to the script you already have
+BASE_WORKDIR = os.path.join(tempfile.gettempdir(), "amort_web")
+os.makedirs(BASE_WORKDIR, exist_ok=True)
+ALLOWED = {".xlsx", ".xls", ".csv"}
+
+def allowed_file(fn):
+    return os.path.splitext(fn.lower())[1] in ALLOWED
+
+st.markdown("Upload the Excel file that your CLI used to expect, then paste interest rates/dates as instructed.")
+
+uploaded = st.file_uploader("Excel file", type=["xlsx","xls","csv"])
+rates_text = st.text_area("Interest rates & dates (first line = first rate; following lines: rate,YYYY-MM-DD)", height=200,
+                         placeholder="14.5%\n13.75%,2025-01-01\n12%,2026-01-01")
+
+timeout = st.number_input("Timeout (seconds)", value=120, min_value=5, max_value=3600)
+
+if st.button("Process"):
+    if uploaded is None:
+        st.error("Upload a file first.")
+    else:
+        filename = secure_filename(uploaded.name)
+        if not allowed_file(filename):
+            st.error("File extension not allowed.")
+        elif not os.path.exists(AMORT_SOURCE):
+            st.error(f"amort.py not found at {AMORT_SOURCE}.")
+        else:
+            # prepare workdir
+            wid = uuid.uuid4().hex
+            wd = os.path.join(BASE_WORKDIR, wid)
+            os.makedirs(wd, exist_ok=True)
+            # save uploaded file
+            saved_path = os.path.join(wd, filename)
+            with open(saved_path, "wb") as f:
+                f.write(uploaded.getbuffer())
+            # copy amort.py
+            shutil.copy(AMORT_SOURCE, os.path.join(wd, "amort.py"))
+            # build stdin for amort.py
+            def build_stdin(basename, text):
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                if not lines:
+                    return (basename + "\n\n").encode("utf-8")
+                stdin_lines = [basename, lines[0]]
+                for ln in lines[1:]:
+                    parts = [p.strip() for p in (ln.split(",",1) if "," in ln else ln.split(None,1))]
+                    if len(parts)!=2:
+                        raise ValueError(f"Bad line: {ln}")
+                    # validate date
+                    datetime.strptime(parts[1], "%Y-%m-%d")
+                    stdin_lines.append(parts[0])
+                    stdin_lines.append(parts[1])
+                stdin_lines.append("")  # final blank line
+                return ("\n".join(stdin_lines) + "\n").encode("utf-8")
+            try:
+                stdin_bytes = build_stdin(filename, rates_text)
+            except Exception as e:
+                st.error(f"Could not parse rates/dates: {e}")
+                raise st.stop()
+            # run amort.py
+            with st.spinner("Running amort.py..."):
+                try:
+                    proc = subprocess.Popen([sys.executable, "amort.py"],
+                                             cwd=wd, stdin=subprocess.PIPE,
+                                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    stdout, stderr = proc.communicate(input=stdin_bytes, timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    stdout, stderr = proc.communicate()
+                    st.error("Process timed out.")
+                except Exception as e:
+                    st.error(f"Failed to run amort.py: {e}")
+                    raise st.stop()
+
+            st.subheader("STDOUT")
+            st.code(stdout.decode("utf-8", errors="ignore"))
+            st.subheader("STDERR")
+            st.code(stderr.decode("utf-8", errors="ignore"))
+
+            # expected output filename pattern from your script: "_output_"+file_path.lower()
+            expected = "_output_" + filename.lower()
+            expected_path = os.path.join(wd, expected)
+            if os.path.exists(expected_path):
+                st.success("Processed file generated.")
+                with open(expected_path, "rb") as f:
+                    data = f.read()
+                st.download_button("Download processed file", data=data, file_name=expected, mime="application/octet-stream")
+            else:
+                st.error("No output file found. Check stdout/stderr above.")
