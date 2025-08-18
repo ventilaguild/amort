@@ -5,7 +5,7 @@ from werkzeug.utils import secure_filename  # pip install werkzeug
 
 st.set_page_config(page_title="Amort uploader", layout="wide")
 st.title("Amort generator.")
-st.markdown("Strips and cleans data from Azurite amort. Interest calculated daily, charged monthly. The program has not been tested extensively so please let me know any faults/inconveniences. Then we can iron those out.")
+st.markdown("Strips and cleans data from Azurite amort. Interest calculated daily, charged monthly. Please let me know any faults/inconveniences, then we can iron those out.")
 
 AMORT_SOURCE = "amort.py"   # path to the script you already have
 BASE_WORKDIR = os.path.join(tempfile.gettempdir(), "amort_web")
@@ -95,4 +95,5 @@ if st.button("Process"):
             else:
 
                 st.error("No output file found. Check stdout/stderr above.")
+
 
